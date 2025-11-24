@@ -1,5 +1,5 @@
 from fastmcp import FastMCP
-import psycopg
+import psycopg2
 import os
 import json
 import pathlib
@@ -12,9 +12,15 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise Exception("❌ Missing environment variable DATABASE_URL")
 
-# psycopg3 connect
+
+# ---------------------------------------------------------
+# Database Connection Helper (psycopg2)
+# ---------------------------------------------------------
 def get_conn():
-    return psycopg.connect(DATABASE_URL, autocommit=True)
+    conn = psycopg2.connect(DATABASE_URL)
+    conn.autocommit = True
+    return conn
+
 
 # ---------------------------------------------------------
 # Add Expense
@@ -39,6 +45,7 @@ def add_expense(date: str, amount: float, category: str,
 
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
 
 # ---------------------------------------------------------
 # List Expenses
@@ -66,6 +73,7 @@ def list_expenses(start_date: str, end_date: str):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+
 # ---------------------------------------------------------
 # Summarize
 # ---------------------------------------------------------
@@ -75,7 +83,6 @@ def summarize(start_date: str, end_date: str, category: str = None):
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
-
                 if category:
                     cur.execute(
                         """
@@ -106,6 +113,7 @@ def summarize(start_date: str, end_date: str, category: str = None):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+
 # ---------------------------------------------------------
 # Categories Resource
 # ---------------------------------------------------------
@@ -123,5 +131,9 @@ def categories():
         "categories": ["Food", "Travel", "Shopping", "Bills", "Other"]
     })
 
+
+# ---------------------------------------------------------
+# Run MCP Server
+# ---------------------------------------------------------
 if __name__ == "__main__":
     mcp.run(transport="http", host="0.0.0.0", port=8000)
