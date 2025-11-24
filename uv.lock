@@ -1,6 +1,10 @@
 version = 1
 revision = 3
 requires-python = ">=3.12"
+resolution-markers = [
+    "sys_platform == 'win32'",
+    "sys_platform != 'win32'",
+]
 
 [[package]]
 name = "annotated-types"
@@ -629,6 +633,30 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/a9/14/f2724bd1986158a348316e86fdd0837a838b14a711df3f00e47fba597447/psycopg-3.2.13-py3-none-any.whl", hash = "sha256:a481374514f2da627157f767a9336705ebefe93ea7a0522a6cbacba165da179a", size = 206797, upload-time = "2025-11-21T22:29:39.733Z" },
 ]
 
+[package.optional-dependencies]
+binary = [
+    { name = "psycopg-binary", marker = "implementation_name != 'pypy' and sys_platform == 'win32'" },
+]
+c = [
+    { name = "psycopg-c", marker = "implementation_name != 'pypy' and sys_platform != 'win32'" },
+]
+
+[[package]]
+name = "psycopg-binary"
+version = "3.2.13"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ef/f8/c924c7dc792c81bf6181d7d4eeb613c8b2151b3a208f95cedec3c1a25ba3/psycopg_binary-3.2.13-cp312-cp312-win_amd64.whl", hash = "sha256:b53b0d9499805b307017070492189e349256e0946f62c815e442baa01f2ea6c5", size = 2902172, upload-time = "2025-11-21T22:31:41.256Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/64/3d1c2f1fd09b60cdfbe68b9a810b357ba505eff6e4bdb1a2d9f6729da64c/psycopg_binary-3.2.13-cp313-cp313-win_amd64.whl", hash = "sha256:594dfbca3326e997ae738d3d339004e8416b1f7390f52ce8dc2d692393e8fa96", size = 2905584, upload-time = "2025-11-21T22:32:23.399Z" },
+    { url = "https://files.pythonhosted.org/packages/46/b2/411d4180252144f7eff024894d2d2ebb98c012c944a282fc20250870e461/psycopg_binary-3.2.13-cp314-cp314-win_amd64.whl", hash = "sha256:5c77f156c7316529ed371b5f95a51139e531328ee39c37493a2afcbc1f79d5de", size = 3000162, upload-time = "2025-11-21T22:33:07.378Z" },
+]
+
+[[package]]
+name = "psycopg-c"
+version = "3.2.13"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/82/d4/f471e7f87c0a75de96a3f17a532412b8866a888383289d54ddb6adb5b54e/psycopg_c-3.2.13.tar.gz", hash = "sha256:3f8d69a563f198198aaf3333e3830c68368a4e45cd60faeabca9949f958f6480", size = 624372, upload-time = "2025-11-21T22:34:34.084Z" }
+
 [[package]]
 name = "py-key-value-aio"
 version = "0.2.8"
@@ -923,12 +951,16 @@ source = { virtual = "." }
 dependencies = [
     { name = "fastmcp" },
     { name = "psycopg" },
+    { name = "psycopg", extra = ["binary"], marker = "sys_platform == 'win32'" },
+    { name = "psycopg", extra = ["c"], marker = "sys_platform != 'win32'" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "fastmcp", specifier = ">=2.13.1" },
     { name = "psycopg", specifier = ">=3.2.13" },
+    { name = "psycopg", extras = ["binary"], marker = "sys_platform == 'win32'", specifier = ">=3.2.13" },
+    { name = "psycopg", extras = ["c"], marker = "sys_platform != 'win32'", specifier = ">=3.2.13" },
 ]
 
 [[package]]
@@ -1058,8 +1090,8 @@ name = "secretstorage"
 version = "3.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography" },
-    { name = "jeepney" },
+    { name = "cryptography", marker = "sys_platform != 'win32'" },
+    { name = "jeepney", marker = "sys_platform != 'win32'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/1c/03/e834bcd866f2f8a49a85eaff47340affa3bfa391ee9912a952a1faa68c7b/secretstorage-3.5.0.tar.gz", hash = "sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be", size = 19884, upload-time = "2025-11-23T19:02:53.191Z" }
 wheels = [

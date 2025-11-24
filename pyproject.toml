@@ -7,4 +7,6 @@ requires-python = ">=3.12"
 dependencies = [
     "fastmcp>=2.13.1",
     "psycopg>=3.2.13",
+    "psycopg[binary]>=3.2.13 ; sys_platform == 'win32'",
+    "psycopg[c]>=3.2.13 ; sys_platform != 'win32'",
 ]

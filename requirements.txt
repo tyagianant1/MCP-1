@@ -1,0 +1,3 @@
+fastmcp
+psycopg[binary] ; platform_system == "Windows"
+psycopg[c] ; platform_system != "Windows"
