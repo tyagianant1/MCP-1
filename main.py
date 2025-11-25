@@ -1,127 +1,126 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import psycopg2
+import psycopg
 import os
-import json
-import pathlib
-
-app = FastAPI(title="ExpenseTracker API")
 
 # ---------------------------------------------------------
-# Load DB URL
+# FASTAPI APP
 # ---------------------------------------------------------
-DATABASE_URL = os.getenv("DATABASE_URL")
+app = FastAPI(title="Expense Tracker API", version="0.1.0")
+
+# ---------------------------------------------------------
+# DATABASE
+# ---------------------------------------------------------
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
 if not DATABASE_URL:
-    raise Exception("❌ Missing environment variable DATABASE_URL")
+    raise Exception("❌ ERROR: DATABASE_URL not found. Set it in Render environment.")
 
 def get_conn():
-    conn = psycopg2.connect(DATABASE_URL)
-    conn.autocommit = True
-    return conn
+    return psycopg.connect(DATABASE_URL, autocommit=True)
 
 # ---------------------------------------------------------
-# Models
+# REQUEST BODY MODEL
 # ---------------------------------------------------------
-class ExpenseInput(BaseModel):
+class Expense(BaseModel):
     date: str
     amount: float
     category: str
-    subcategory: str = ""
-    note: str = ""
+    subcategory: str
+    note: str
 
-class Range(BaseModel):
-    start_date: str
-    end_date: str
 
 # ---------------------------------------------------------
-# Add Expense (POST)
+# ROUTES
 # ---------------------------------------------------------
-@app.post("/add-expense")
-def add_expense(data: ExpenseInput):
+
+@app.get("/")
+def root():
+    return {"message": "Expense Tracker API is running!"}
+
+# -------------------- ADD EXPENSE ------------------------
+@app.post("/add")
+def add_expense(expense: Expense):
     try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO expenses (date, amount, category, subcategory, note)
-                    VALUES (%s, %s, %s, %s, %s)
-                    RETURNING id;
-                    """,
-                    (data.date, data.amount, data.category, data.subcategory, data.note)
-                )
-                row_id = cur.fetchone()[0]
-                return {"status": "success", "id": row_id}
+        conn = get_conn()
+        cur = conn.cursor()
+
+        cur.execute("""
+            INSERT INTO expenses (date, amount, category, subcategory, note)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (expense.date, expense.amount, expense.category, expense.subcategory, expense.note))
+
+        return {
+            "status": "success",
+            "message": "Expense added successfully",
+            "data": expense.dict()
+        }
 
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
-# ---------------------------------------------------------
-# List Expenses (POST)
-# ---------------------------------------------------------
-@app.post("/list-expenses")
-def list_expenses(data: Range):
+
+# -------------------- LIST EXPENSES ------------------------
+@app.get("/list")
+def list_expenses(start_date: str, end_date: str):
+
     try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT id, date, amount, category, subcategory, note
-                    FROM expenses
-                    WHERE date BETWEEN %s AND %s
-                    ORDER BY date DESC, id DESC;
-                    """,
-                    (data.start_date, data.end_date)
-                )
-                rows = cur.fetchall()
-                cols = [c[0] for c in cur.description]
+        conn = get_conn()
+        cur = conn.cursor()
 
-        return [dict(zip(cols, r)) for r in rows]
+        cur.execute("""
+            SELECT id, date, amount, category, subcategory, note
+            FROM expenses
+            WHERE date BETWEEN %s AND %s
+            ORDER BY date ASC
+        """, (start_date, end_date))
+
+        rows = cur.fetchall()
+
+        result = []
+        for r in rows:
+            result.append({
+                "id": r[0],
+                "date": r[1],
+                "amount": float(r[2]),
+                "category": r[3],
+                "subcategory": r[4],
+                "note": r[5]
+            })
+
+        return result
 
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
-# ---------------------------------------------------------
-# Summarize (POST)
-# ---------------------------------------------------------
-@app.post("/summarize")
-def summarize(data: Range, category: str = None):
+
+# -------------------- SUMMARY ------------------------
+@app.get("/summary")
+def summary(start_date: str, end_date: str, category: str = None):
     try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                if category:
-                    cur.execute(
-                        """
-                        SELECT category, SUM(amount) AS total, COUNT(*) AS count
-                        FROM expenses
-                        WHERE date BETWEEN %s AND %s AND category = %s
-                        GROUP BY category;
-                        """,
-                        (data.start_date, data.end_date, category)
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT category, SUM(amount) AS total, COUNT(*) AS count
-                        FROM expenses
-                        WHERE date BETWEEN %s AND %s
-                        GROUP BY category;
-                        """,
-                        (data.start_date, data.end_date)
-                    )
+        conn = get_conn()
+        cur = conn.cursor()
 
-                rows = cur.fetchall()
-                cols = [c[0] for c in cur.description]
+        if category:
+            cur.execute("""
+                SELECT category, SUM(amount)
+                FROM expenses
+                WHERE date BETWEEN %s AND %s AND category = %s
+                GROUP BY category
+            """, (start_date, end_date, category))
+        else:
+            cur.execute("""
+                SELECT category, SUM(amount)
+                FROM expenses
+                WHERE date BETWEEN %s AND %s
+                GROUP BY category
+            """, (start_date, end_date))
 
-        return [dict(zip(cols, r)) for r in rows]
+        rows = cur.fetchall()
+
+        summary_list = [{"category": r[0], "total": float(r[1])} for r in rows]
+
+        return {"summary": summary_list}
 
     except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# ---------------------------------------------------------
-# Categories (GET)
-# ---------------------------------------------------------
-@app.get("/categories")
-def categories():
-    return {
-        "categories": ["Food", "Travel", "Shopping", "Bills", "Other"]
-    }
+        raise HTTPException(status_code=500, detail=str(e))
