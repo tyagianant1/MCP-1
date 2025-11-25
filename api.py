@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from main import add_expense, list_expenses, summarize
+from main import add_expense, list_expenses, summary
 
 app = FastAPI()
 
