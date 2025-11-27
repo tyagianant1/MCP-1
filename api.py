@@ -11,7 +11,10 @@ app = FastAPI(
     description="API for tracking personal expenses with categories and summaries",
     version="1.0.0",
     servers=[
-        {"url": "https://mcp-1-49zk.onrender.com", "description": "Production server"}
+        {
+            "url": "https://expense-fnfhepavd8bnc9eh.eastasia-01.azurewebsites.net",
+            "description": "Production server",
+        }
     ],
 )
 
