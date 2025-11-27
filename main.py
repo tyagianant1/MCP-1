@@ -1,92 +1,127 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import psycopg
+from typing import Optional
+import psycopg2
 import os
 
-# ---------------------------------------------------------
-# FASTAPI APP
-# ---------------------------------------------------------
-app = FastAPI(title="Expense Tracker API", version="0.1.0")
+app = FastAPI(title="Expense Tracker API")
 
-# ---------------------------------------------------------
-# DATABASE
-# ---------------------------------------------------------
-DATABASE_URL = os.environ.get("DATABASE_URL")
+# -----------------------------
+# CORS (Required for ChatGPT)
+# -----------------------------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all (safe for your usage)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# -----------------------------
+# Database Connection
+# -----------------------------
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
-    raise Exception("❌ ERROR: DATABASE_URL not found. Set it in Render environment.")
+    raise Exception("❌ DATABASE_URL not found")
+
 
 def get_conn():
-    return psycopg.connect(DATABASE_URL, autocommit=True)
+    conn = psycopg2.connect(DATABASE_URL)
+    conn.autocommit = True
+    return conn
 
-# ---------------------------------------------------------
-# REQUEST BODY MODEL
-# ---------------------------------------------------------
-class Expense(BaseModel):
+
+# -----------------------------
+# Models
+# -----------------------------
+class ExpenseRequest(BaseModel):
     date: str
     amount: float
     category: str
-    subcategory: str
-    note: str
+    subcategory: Optional[str] = ""
+    note: Optional[str] = ""
 
 
-# ---------------------------------------------------------
-# ROUTES
-# ---------------------------------------------------------
-
+# -----------------------------
+# Routes
+# -----------------------------
 @app.get("/")
 def root():
     return {"message": "Expense Tracker API is running!"}
 
-# -------------------- ADD EXPENSE ------------------------
-@app.post("/add")
-def add_expense(expense: Expense):
-    try:
-        conn = get_conn()
-        cur = conn.cursor()
 
-        cur.execute("""
-            INSERT INTO expenses (date, amount, category, subcategory, note)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (expense.date, expense.amount, expense.category, expense.subcategory, expense.note))
+# ADD EXPENSE
+@app.post("/add")
+def add_expense(expense: ExpenseRequest):
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO expenses (date, amount, category, subcategory, note)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id;
+                    """,
+                    (
+                        expense.date,
+                        expense.amount,
+                        expense.category,
+                        expense.subcategory,
+                        expense.note,
+                    ),
+                )
+                new_id = cur.fetchone()[0]
 
         return {
             "status": "success",
             "message": "Expense added successfully",
-            "data": expense.dict()
+            "data": {
+                "id": new_id,
+                "date": expense.date,
+                "amount": expense.amount,
+                "category": expense.category,
+                "subcategory": expense.subcategory,
+                "note": expense.note,
+            },
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
 
-# -------------------- LIST EXPENSES ------------------------
+# LIST EXPENSES
 @app.get("/list")
-def list_expenses(start_date: str, end_date: str):
-
+def list_expenses(
+    start_date: str = Query(..., description="Start date YYYY-MM-DD"),
+    end_date: str = Query(..., description="End date YYYY-MM-DD"),
+):
     try:
-        conn = get_conn()
-        cur = conn.cursor()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, date, amount, category, subcategory, note
+                    FROM expenses
+                    WHERE date BETWEEN %s AND %s
+                    ORDER BY date DESC, id DESC;
+                    """,
+                    (start_date, end_date),
+                )
+                rows = cur.fetchall()
 
-        cur.execute("""
-            SELECT id, date, amount, category, subcategory, note
-            FROM expenses
-            WHERE date BETWEEN %s AND %s
-            ORDER BY date ASC
-        """, (start_date, end_date))
-
-        rows = cur.fetchall()
-
-        result = []
-        for r in rows:
-            result.append({
+        result = [
+            {
                 "id": r[0],
-                "date": r[1],
+                "date": str(r[1]),
                 "amount": float(r[2]),
                 "category": r[3],
                 "subcategory": r[4],
-                "note": r[5]
-            })
+                "note": r[5],
+            }
+            for r in rows
+        ]
 
         return result
 
@@ -94,33 +129,53 @@ def list_expenses(start_date: str, end_date: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# -------------------- SUMMARY ------------------------
+# SUMMARY
 @app.get("/summary")
-def summary(start_date: str, end_date: str, category: str = None):
+def summary(
+    start_date: str = Query(...),
+    end_date: str = Query(...),
+    category: Optional[str] = Query(None),
+):
     try:
-        conn = get_conn()
-        cur = conn.cursor()
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if category:
+                    cur.execute(
+                        """
+                        SELECT category, SUM(amount), COUNT(*)
+                        FROM expenses
+                        WHERE date BETWEEN %s AND %s AND category=%s
+                        GROUP BY category;
+                        """,
+                        (start_date, end_date, category),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT category, SUM(amount), COUNT(*)
+                        FROM expenses
+                        WHERE date BETWEEN %s AND %s
+                        GROUP BY category;
+                        """,
+                        (start_date, end_date),
+                    )
 
-        if category:
-            cur.execute("""
-                SELECT category, SUM(amount)
-                FROM expenses
-                WHERE date BETWEEN %s AND %s AND category = %s
-                GROUP BY category
-            """, (start_date, end_date, category))
-        else:
-            cur.execute("""
-                SELECT category, SUM(amount)
-                FROM expenses
-                WHERE date BETWEEN %s AND %s
-                GROUP BY category
-            """, (start_date, end_date))
+                rows = cur.fetchall()
 
-        rows = cur.fetchall()
+        summary_data = [
+            {"category": r[0], "total": float(r[1]), "count": r[2]} for r in rows
+        ]
 
-        summary_list = [{"category": r[0], "total": float(r[1])} for r in rows]
-
-        return {"summary": summary_list}
+        return {"summary": summary_data}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# -----------------------------
+# LOCAL RUN
+# -----------------------------
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)

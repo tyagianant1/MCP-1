@@ -1,59 +1,135 @@
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 import psycopg2
 import os
 
-app = FastAPI(title="Expense Tracker API")
+# FastAPI app with proper configuration
+app = FastAPI(
+    title="Expense Tracker API",
+    description="API for tracking personal expenses with categories and summaries",
+    version="1.0.0",
+    servers=[
+        {"url": "https://mcp-1-49zk.onrender.com", "description": "Production server"}
+    ],
+)
 
-# -----------------------------
-# CORS (Required for ChatGPT)
-# -----------------------------
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # Allow all (safe for your usage)
+    allow_origins=["https://chat.openai.com", "https://chatgpt.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# -----------------------------
-# Database Connection
-# -----------------------------
+# Get database URL
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
-    raise Exception("❌ DATABASE_URL not found")
+    raise Exception("Missing DATABASE_URL environment variable")
 
+
+# Database helper
 def get_conn():
     conn = psycopg2.connect(DATABASE_URL)
     conn.autocommit = True
     return conn
 
 
-# -----------------------------
-# Models
-# -----------------------------
+# ==================== PYDANTIC MODELS ====================
+
+
+# Request models
 class ExpenseRequest(BaseModel):
+    date: str = Field(
+        ..., description="Date in YYYY-MM-DD format", example="2025-11-26"
+    )
+    amount: float = Field(..., description="Expense amount", example=200.00, gt=0)
+    category: str = Field(
+        ...,
+        description="Expense category (Food, Travel, Shopping, Bills, Other)",
+        example="Food",
+    )
+    subcategory: str = Field(
+        "", description="Optional subcategory", example="Restaurant"
+    )
+    note: str = Field("", description="Optional note", example="Lunch with team")
+
+
+# Response models
+class ExpenseData(BaseModel):
+    id: int = Field(..., description="Expense ID")
+    date: str = Field(..., description="Date of expense")
+    amount: float = Field(..., description="Expense amount")
+    category: str = Field(..., description="Category")
+    subcategory: str = Field(..., description="Subcategory")
+    note: str = Field(..., description="Note")
+
+
+class AddExpenseResponse(BaseModel):
+    status: str = Field(..., description="Status of the operation")
+    message: str = Field(..., description="Success message")
+    data: ExpenseData = Field(..., description="Added expense data")
+
+
+class ExpenseItem(BaseModel):
+    id: int
     date: str
     amount: float
     category: str
-    subcategory: Optional[str] = ""
-    note: Optional[str] = ""
+    subcategory: str
+    note: str
 
 
-# -----------------------------
-# Routes
-# -----------------------------
+class ListExpensesResponse(BaseModel):
+    count: int = Field(..., description="Number of expenses returned")
+    expenses: list[ExpenseItem] = Field(..., description="List of expenses")
+
+
+class CategorySummary(BaseModel):
+    category: str = Field(..., description="Category name")
+    total: float = Field(..., description="Total amount spent")
+    count: int = Field(..., description="Number of expenses")
+
+
+class PeriodInfo(BaseModel):
+    start: str = Field(..., description="Start date")
+    end: str = Field(..., description="End date")
+
+
+class SummaryResponse(BaseModel):
+    summary: list[CategorySummary] = Field(..., description="Summary by category")
+    total_expenses: int = Field(..., description="Total number of categories")
+    grand_total: float = Field(..., description="Total amount across all categories")
+    period: PeriodInfo = Field(..., description="Date range for the summary")
+
+
+# ==================== ENDPOINTS ====================
+
+
 @app.get("/")
 def root():
-    return {"message": "Expense Tracker API is running!"}
+    return {
+        "message": "Expense Tracker API is running!",
+        "version": "1.0.0",
+        "docs": "/docs",
+    }
 
 
-# ADD EXPENSE
-@app.post("/add")
-def add_expense(expense: ExpenseRequest):
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
+
+
+@app.post("/add", response_model=AddExpenseResponse, tags=["Expenses"])
+def add_expense_api(expense: ExpenseRequest):
+    """
+    Add a new expense to the database.
+
+    Categories: Food, Travel, Shopping, Bills, Other
+    """
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -71,31 +147,36 @@ def add_expense(expense: ExpenseRequest):
                         expense.note,
                     ),
                 )
-                new_id = cur.fetchone()[0]
+                row_id = cur.fetchone()[0]
 
-        return {
-            "status": "success",
-            "message": "Expense added successfully",
-            "data": {
-                "id": new_id,
-                "date": expense.date,
-                "amount": expense.amount,
-                "category": expense.category,
-                "subcategory": expense.subcategory,
-                "note": expense.note,
-            },
-        }
+                expense_data = ExpenseData(
+                    id=row_id,
+                    date=expense.date,
+                    amount=expense.amount,
+                    category=expense.category,
+                    subcategory=expense.subcategory,
+                    note=expense.note,
+                )
 
+                return AddExpenseResponse(
+                    status="success",
+                    message="Expense added successfully",
+                    data=expense_data,
+                )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# LIST EXPENSES
-@app.get("/list")
-def list_expenses(
-    start_date: str = Query(..., description="Start date YYYY-MM-DD"),
-    end_date: str = Query(..., description="End date YYYY-MM-DD"),
+@app.get("/list", response_model=ListExpensesResponse, tags=["Expenses"])
+def list_expenses_api(
+    start_date: str = Query(
+        ..., description="Start date YYYY-MM-DD", example="2025-11-01"
+    ),
+    end_date: str = Query(..., description="End date YYYY-MM-DD", example="2025-11-30"),
 ):
+    """
+    List all expenses within a date range.
+    """
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
@@ -110,40 +191,46 @@ def list_expenses(
                 )
                 rows = cur.fetchall()
 
-        result = [
-            {
-                "id": r[0],
-                "date": str(r[1]),
-                "amount": float(r[2]),
-                "category": r[3],
-                "subcategory": r[4],
-                "note": r[5],
-            }
-            for r in rows
-        ]
+                expenses = []
+                for r in rows:
+                    expenses.append(
+                        ExpenseItem(
+                            id=r[0],
+                            date=str(r[1]),
+                            amount=float(r[2]),
+                            category=r[3],
+                            subcategory=r[4] or "",
+                            note=r[5] or "",
+                        )
+                    )
 
-        return result
-
+                return ListExpensesResponse(count=len(expenses), expenses=expenses)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# SUMMARY
-@app.get("/summary")
-def summary(
-    start_date: str = Query(...),
-    end_date: str = Query(...),
-    category: Optional[str] = Query(None),
+@app.get("/summary", response_model=SummaryResponse, tags=["Analytics"])
+def summary_api(
+    start_date: str = Query(
+        ..., description="Start date YYYY-MM-DD", example="2025-11-01"
+    ),
+    end_date: str = Query(..., description="End date YYYY-MM-DD", example="2025-11-30"),
+    category: Optional[str] = Query(
+        None, description="Filter by category", example="Food"
+    ),
 ):
+    """
+    Get expense summary grouped by category.
+    """
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 if category:
                     cur.execute(
                         """
-                        SELECT category, SUM(amount), COUNT(*)
+                        SELECT category, SUM(amount) AS total, COUNT(*) AS count
                         FROM expenses
-                        WHERE date BETWEEN %s AND %s AND category=%s
+                        WHERE date BETWEEN %s AND %s AND category = %s
                         GROUP BY category;
                         """,
                         (start_date, end_date, category),
@@ -151,29 +238,36 @@ def summary(
                 else:
                     cur.execute(
                         """
-                        SELECT category, SUM(amount), COUNT(*)
+                        SELECT category, SUM(amount) AS total, COUNT(*) AS count
                         FROM expenses
                         WHERE date BETWEEN %s AND %s
-                        GROUP BY category;
+                        GROUP BY category
+                        ORDER BY total DESC;
                         """,
                         (start_date, end_date),
                     )
 
                 rows = cur.fetchall()
 
-        summary_data = [
-            {"category": r[0], "total": float(r[1]), "count": r[2]} for r in rows
-        ]
+                summary_list = []
+                total_amount = 0
+                for r in rows:
+                    amount = float(r[1])
+                    summary_list.append(
+                        CategorySummary(category=r[0], total=amount, count=r[2])
+                    )
+                    total_amount += amount
 
-        return {"summary": summary_data}
-
+                return SummaryResponse(
+                    summary=summary_list,
+                    total_expenses=len(summary_list),
+                    grand_total=total_amount,
+                    period=PeriodInfo(start=start_date, end=end_date),
+                )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# -----------------------------
-# LOCAL RUN
-# -----------------------------
 if __name__ == "__main__":
     import uvicorn
 
