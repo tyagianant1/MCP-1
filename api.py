@@ -8,8 +8,8 @@ import os
 # FastAPI app with proper configuration
 app = FastAPI(
     title="Expense Tracker API",
-    description="API for tracking personal expenses with categories and summaries",
-    version="1.0.0",
+    description="API for tracking personal expenses with categories and summaries. Now with natural language query support!",
+    version="2.0.0",
     servers=[
         {
             "url": "https://expense-fnfhepavd8bnc9eh.eastasia-01.azurewebsites.net",
@@ -61,6 +61,24 @@ class ExpenseRequest(BaseModel):
     note: str = Field("", description="Optional note", example="Lunch with team")
 
 
+class NaturalQueryRequest(BaseModel):
+    question: str = Field(
+        ...,
+        description="Natural language question about expenses",
+        example="How much did I spend on food last month?",
+    )
+    start_date: Optional[str] = Field(
+        None,
+        description="Optional start date for context (YYYY-MM-DD)",
+        example="2025-11-01",
+    )
+    end_date: Optional[str] = Field(
+        None,
+        description="Optional end date for context (YYYY-MM-DD)",
+        example="2025-11-30",
+    )
+
+
 # Response models
 class ExpenseData(BaseModel):
     id: int = Field(..., description="Expense ID")
@@ -109,6 +127,217 @@ class SummaryResponse(BaseModel):
     period: PeriodInfo = Field(..., description="Date range for the summary")
 
 
+class NaturalQueryResponse(BaseModel):
+    question: str = Field(..., description="Original question asked")
+    sql_query: str = Field(..., description="Generated SQL query used")
+    results: list[dict] = Field(
+        ..., description="Query results as list of dictionaries"
+    )
+    row_count: int = Field(..., description="Number of rows returned")
+    interpretation: str = Field(..., description="Brief explanation of what was found")
+
+
+# ==================== SQL GENERATION HELPER ====================
+
+
+def generate_sql_from_question(
+    question: str, start_date: Optional[str], end_date: Optional[str]
+) -> tuple[str, str]:
+    """
+    Convert natural language to SQL query using pattern matching.
+    Returns (sql_query, interpretation)
+
+    The GPT Action will describe the user's intent, and this function
+    translates common patterns into SQL.
+    """
+    question_lower = question.lower()
+
+    # Default date range
+    date_filter = ""
+    if start_date and end_date:
+        date_filter = f"WHERE date BETWEEN '{start_date}' AND '{end_date}'"
+    elif start_date:
+        date_filter = f"WHERE date >= '{start_date}'"
+    elif end_date:
+        date_filter = f"WHERE date <= '{end_date}'"
+
+    # Pattern 1: Total spending (overall or by category)
+    if any(word in question_lower for word in ["total", "how much", "sum", "spent"]):
+        if any(
+            word in question_lower
+            for word in ["category", "categories", "by category", "per category"]
+        ):
+            sql = f"""
+            SELECT category, SUM(amount) as total_amount, COUNT(*) as expense_count
+            FROM expenses
+            {date_filter}
+            GROUP BY category
+            ORDER BY total_amount DESC
+            """
+            interpretation = "Showing total spending grouped by category"
+        else:
+            # Check for specific category
+            category_filter = ""
+            for cat in ["food", "travel", "shopping", "bills", "other"]:
+                if cat in question_lower:
+                    cat_condition = f"category ILIKE '%{cat}%'"
+                    if date_filter:
+                        category_filter = f"{date_filter} AND {cat_condition}"
+                    else:
+                        category_filter = f"WHERE {cat_condition}"
+                    break
+
+            final_filter = category_filter if category_filter else date_filter
+            sql = f"""
+            SELECT SUM(amount) as total_amount, COUNT(*) as total_expenses
+            FROM expenses
+            {final_filter}
+            """
+            interpretation = "Showing total spending amount and number of expenses"
+
+    # Pattern 2: List/Show expenses
+    elif any(
+        word in question_lower
+        for word in ["list", "show", "display", "all", "expenses"]
+    ):
+        category_filter = ""
+        amount_filter = ""
+
+        # Check for category filter
+        for cat in ["food", "travel", "shopping", "bills", "other"]:
+            if cat in question_lower:
+                cat_condition = f"category ILIKE '%{cat}%'"
+                category_filter = (
+                    f" AND {cat_condition}" if date_filter else f"WHERE {cat_condition}"
+                )
+                break
+
+        # Check for amount filter (over/above/more than)
+        if any(
+            word in question_lower
+            for word in ["over", "above", "more than", "greater than"]
+        ):
+            import re
+
+            amount_match = re.search(r"\$?(\d+)", question_lower)
+            if amount_match:
+                amount = amount_match.group(1)
+                amount_condition = f"amount > {amount}"
+                if date_filter or category_filter:
+                    amount_filter = f" AND {amount_condition}"
+                else:
+                    amount_filter = f"WHERE {amount_condition}"
+
+        sql = f"""
+        SELECT id, date, amount, category, subcategory, note
+        FROM expenses
+        {date_filter}{category_filter}{amount_filter}
+        ORDER BY date DESC, amount DESC
+        LIMIT 100
+        """
+        interpretation = "Showing list of expenses matching your criteria"
+
+    # Pattern 3: Biggest/Highest/Maximum
+    elif any(
+        word in question_lower
+        for word in ["biggest", "highest", "maximum", "most", "largest"]
+    ):
+        if "category" in question_lower:
+            sql = f"""
+            SELECT category, SUM(amount) as total_amount, COUNT(*) as expense_count
+            FROM expenses
+            {date_filter}
+            GROUP BY category
+            ORDER BY total_amount DESC
+            LIMIT 1
+            """
+            interpretation = "Showing the category with highest spending"
+        else:
+            sql = f"""
+            SELECT id, date, amount, category, subcategory, note
+            FROM expenses
+            {date_filter}
+            ORDER BY amount DESC
+            LIMIT 10
+            """
+            interpretation = "Showing the highest individual expenses"
+
+    # Pattern 4: Smallest/Lowest/Minimum
+    elif any(
+        word in question_lower for word in ["smallest", "lowest", "minimum", "least"]
+    ):
+        if "category" in question_lower:
+            sql = f"""
+            SELECT category, SUM(amount) as total_amount, COUNT(*) as expense_count
+            FROM expenses
+            {date_filter}
+            GROUP BY category
+            ORDER BY total_amount ASC
+            LIMIT 1
+            """
+            interpretation = "Showing the category with lowest spending"
+        else:
+            sql = f"""
+            SELECT id, date, amount, category, subcategory, note
+            FROM expenses
+            {date_filter}
+            ORDER BY amount ASC
+            LIMIT 10
+            """
+            interpretation = "Showing the lowest individual expenses"
+
+    # Pattern 5: Average
+    elif any(word in question_lower for word in ["average", "avg", "mean"]):
+        if "category" in question_lower:
+            sql = f"""
+            SELECT category, AVG(amount) as average_amount, COUNT(*) as expense_count
+            FROM expenses
+            {date_filter}
+            GROUP BY category
+            ORDER BY average_amount DESC
+            """
+            interpretation = "Showing average spending per category"
+        else:
+            sql = f"""
+            SELECT AVG(amount) as average_amount, COUNT(*) as total_expenses
+            FROM expenses
+            {date_filter}
+            """
+            interpretation = "Showing overall average expense amount"
+
+    # Pattern 6: Count
+    elif any(word in question_lower for word in ["count", "number", "how many"]):
+        if "category" in question_lower:
+            sql = f"""
+            SELECT category, COUNT(*) as expense_count, SUM(amount) as total_amount
+            FROM expenses
+            {date_filter}
+            GROUP BY category
+            ORDER BY expense_count DESC
+            """
+            interpretation = "Showing count of expenses per category"
+        else:
+            sql = f"""
+            SELECT COUNT(*) as total_count
+            FROM expenses
+            {date_filter}
+            """
+            interpretation = "Showing total count of expenses"
+
+    # Default: Return recent expenses
+    else:
+        sql = f"""
+        SELECT id, date, amount, category, subcategory, note
+        FROM expenses
+        {date_filter}
+        ORDER BY date DESC
+        LIMIT 50
+        """
+        interpretation = "Showing recent expenses (default view)"
+
+    return sql.strip(), interpretation
+
+
 # ==================== ENDPOINTS ====================
 
 
@@ -116,14 +345,15 @@ class SummaryResponse(BaseModel):
 def root():
     return {
         "message": "Expense Tracker API is running!",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "docs": "/docs",
+        "new_features": ["Natural language query support via /query endpoint"],
     }
 
 
 @app.get("/health")
 def health():
-    return {"status": "healthy"}
+    return {"status": "healthy", "database": "connected"}
 
 
 @app.post("/add", response_model=AddExpenseResponse, tags=["Expenses"])
@@ -269,6 +499,72 @@ def summary_api(
                 )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/query", response_model=NaturalQueryResponse, tags=["AI Query"])
+def natural_language_query(request: NaturalQueryRequest):
+    """
+    🤖 Execute a natural language query about expenses.
+
+    This endpoint allows you to ask questions in plain English and get SQL-powered answers.
+
+    **Example Questions:**
+    - "How much did I spend on food last month?"
+    - "Show me all travel expenses over $100"
+    - "What's my biggest expense category?"
+    - "List all shopping expenses from last week"
+    - "What's the average amount I spend on bills?"
+    - "How many expenses do I have in November?"
+    - "Show me my smallest expenses"
+
+    **Database Schema:**
+    - Table: expenses
+    - Columns: id, date, amount, category, subcategory, note
+    - Categories: Food, Travel, Shopping, Bills, Other
+
+    **Tips:**
+    - Provide start_date and end_date for better context
+    - Be specific about categories, amounts, or time periods
+    - The system understands common query patterns like "total", "list", "show", "average", etc.
+    """
+    try:
+        # Generate SQL from natural language
+        sql_query, interpretation = generate_sql_from_question(
+            request.question, request.start_date, request.end_date
+        )
+
+        # Execute the query
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql_query)
+                rows = cur.fetchall()
+                columns = [desc[0] for desc in cur.description]
+
+                # Convert to list of dicts
+                results = []
+                for row in rows:
+                    row_dict = {}
+                    for i, col in enumerate(columns):
+                        value = row[i]
+                        # Convert Decimal and date to string for JSON serialization
+                        if hasattr(value, "isoformat"):
+                            value = value.isoformat()
+                        elif hasattr(value, "__float__"):
+                            value = float(value)
+                        row_dict[col] = value
+                    results.append(row_dict)
+
+                return NaturalQueryResponse(
+                    question=request.question,
+                    sql_query=sql_query,
+                    results=results,
+                    row_count=len(results),
+                    interpretation=interpretation,
+                )
+    except psycopg2.Error as e:
+        raise HTTPException(status_code=400, detail=f"Database query error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Query processing error: {str(e)}")
 
 
 if __name__ == "__main__":
