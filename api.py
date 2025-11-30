@@ -504,29 +504,37 @@ def summary_api(
 @app.post("/query", response_model=NaturalQueryResponse, tags=["AI Query"])
 def natural_language_query(request: NaturalQueryRequest):
     """
-    🤖 Execute a natural language query about expenses.
+    Ask questions about expenses in natural language.
 
-    This endpoint allows you to ask questions in plain English and get SQL-powered answers.
+    Examples: "How much did I spend on food?", "Show travel expenses over $100", "What's my biggest category?"
 
-    **Example Questions:**
-    - "How much did I spend on food last month?"
-    - "Show me all travel expenses over $100"
-    - "What's my biggest expense category?"
-    - "List all shopping expenses from last week"
-    - "What's the average amount I spend on bills?"
-    - "How many expenses do I have in November?"
-    - "Show me my smallest expenses"
-
-    **Database Schema:**
-    - Table: expenses
-    - Columns: id, date, amount, category, subcategory, note
-    - Categories: Food, Travel, Shopping, Bills, Other
-
-    **Tips:**
-    - Provide start_date and end_date for better context
-    - Be specific about categories, amounts, or time periods
-    - The system understands common query patterns like "total", "list", "show", "average", etc.
+    Database: expenses table with id, date, amount, category, subcategory, note
+    Categories: Food, Travel, Shopping, Bills, Other
     """
+    # """
+    # 🤖 Execute a natural language query about expenses.
+
+    # This endpoint allows you to ask questions in plain English and get SQL-powered answers.
+
+    # **Example Questions:**
+    # - "How much did I spend on food last month?"
+    # - "Show me all travel expenses over $100"
+    # - "What's my biggest expense category?"
+    # - "List all shopping expenses from last week"
+    # - "What's the average amount I spend on bills?"
+    # - "How many expenses do I have in November?"
+    # - "Show me my smallest expenses"
+
+    # **Database Schema:**
+    # - Table: expenses
+    # - Columns: id, date, amount, category, subcategory, note
+    # - Categories: Food, Travel, Shopping, Bills, Other
+
+    # **Tips:**
+    # - Provide start_date and end_date for better context
+    # - Be specific about categories, amounts, or time periods
+    # - The system understands common query patterns like "total", "list", "show", "average", etc.
+    # """
     try:
         # Generate SQL from natural language
         sql_query, interpretation = generate_sql_from_question(
